@@ -12,7 +12,7 @@ import time
 
 SUBSYSTEM = "remote_subsystem/suspension"
 MQTT_IP = '192.168.0.100'
-SUSPENSION_IP = "192.168.0.10"
+SUSPENSION_IP = "192.168.0.151"
 SUSPENSION_PORT = 3000
 
 #keeping the same function map layout from other code because I like it
