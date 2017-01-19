@@ -1,4 +1,3 @@
-
 import json
 import os
 import paho.mqtt.client as mqtt
@@ -59,17 +58,17 @@ _message_to_bytestring = {
 #states. Might be able to just change the order around in the
 #other dict to match the order of the states and index it like an array?
 _status_code_to_state = {
-    0 : "SOME_STATE",
-    1 : "SOME_OTHER_STATE" #etc
+    1 : "INIT",
+    2 : "HOMING",
+    3 : "READY",
+    4 : "RUNNING",
+    5 : "FAULT"
 }
 
 def idle_func(t, tcp_sock):
     if t == "READY":
         signal("START_SCU", tcp_sock)
 
-# not sure how this will work since the system will go from
-# idle to running through the intermediate states without
-# any extra input from us
 def homing_func(t, tcp_sock):
     pass
     # since transition is automatic from homing to ready,
@@ -163,10 +162,9 @@ def transition(current_state, t_state, tcp_sock):
         transition(current_state, t_state, tcp_sock)
 
 def set_state_from_scu(status):
-    status = "get_the_state_number_from_the_string_idk_how_yet"
+    status = "get_the_state_number_from_the_string_idk_how_yet" #should just be an array index though
     new_state = _status_code_to_state[status] #this will have to decode the message from SCU into a state
     _state["state"] = new_state
-
 
 #pull status from TCP and UDP and send it out
 def logic_loop(client, tcp_sock, udp_sock):
