@@ -8,31 +8,32 @@ import struct
 import sys
 
 SUBSYSTEM = "remote_subsystem/suspension"
-MQTT_IP = '192.168.0.100'
+MQTT_IP = "192.168.0.100"
 SUSPENSION_IP = "192.168.0.151"
 SUSPENSION_PORT = 3000
 
 network_endianness = ''
 
 def get_endianness():
-    if sys.byteorder == 'little':
-        network_endianness='>'
-        print >>sys.stderr, 'Network endianness: opposite of system\'s'
+    if sys.byteorder == "little":
+        network_endianness=">"
+        print >>sys.stderr, "Network endianness: opposite of system\'s"
     else:
-        network_endianness='<'
-        print >>sys.stderr, 'Network endianness: same as system\'s'
+        network_endianness="<"
+        print >>sys.stderr, "Network endianness: same as system\'s'"
 
-#SPEED_AND_ACCELERATION_PERIODIC_MESSAGE = struct.pack(network_endianness+'BBff', 0x20, 8, my_speed, my_acceleration);
-#have to build this ^ one when you have the speed and acceleration
-PING_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x10, 0);
-START_SCU_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x11, 0);
-START_LOGGING_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x12, 0);
-STOP_LOGGING_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x13, 0);
-STOP_SCU_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x14, 0);
-AVAILABLE_SPACE_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x15, 0);
-CLEAR_LOGS_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x16, 0);
-HEARTBEAT_MESSAGE_REPLY = struct.pack(network_endianness+'BBH', 0x57, 2, 123);
-CLEAR_FAULTS_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x18, 0);
+# SPEED_AND_ACCELERATION_PERIODIC_MESSAGE = struct.pack(network_endianness+'BBff', 0x20, 8, my_speed, my_acceleration);
+# have to build this ^ one when you have the speed and acceleration
+# not sure how often you actually have to send it though since it's "periodic"
+PING_MESSAGE_REQ = struct.pack(network_endianness+"BB", 0x10, 0);
+START_SCU_MESSAGE_REQ = struct.pack(network_endianness+"BB", 0x11, 0);
+START_LOGGING_MESSAGE_REQ = struct.pack(network_endianness+"BB", 0x12, 0);
+STOP_LOGGING_MESSAGE_REQ = struct.pack(network_endianness+"BB", 0x13, 0);
+STOP_SCU_MESSAGE_REQ = struct.pack(network_endianness+"BB", 0x14, 0);
+AVAILABLE_SPACE_MESSAGE_REQ = struct.pack(network_endianness+"BB", 0x15, 0);
+CLEAR_LOGS_MESSAGE_REQ = struct.pack(network_endianness+"BB", 0x16, 0);
+HEARTBEAT_MESSAGE_REPLY = struct.pack(network_endianness+"BBH", 0x57, 2, 123);
+CLEAR_FAULTS_MESSAGE_REQ = struct.pack(network_endianness+"BB", 0x18, 0);
 
 # External and internal states
 _state = {
@@ -66,14 +67,14 @@ def idle_func(t, tcp_sock):
     if t == "READY":
         signal("START_SCU", tcp_sock)
 
-#not sure how this will work since the system will go from
-#idle to running through the intermediate states without
-#any extra input from us
+# not sure how this will work since the system will go from
+# idle to running through the intermediate states without
+# any extra input from us
 def homing_func(t, tcp_sock):
     pass
-    #since transition is automatic from homing to ready,
-    #we can just wait until the SCU reports it is ready, which will be
-    #handled by the transition() function
+    # since transition is automatic from homing to ready,
+    # we can just wait until the SCU reports it is ready, which will be
+    # handled by the transition() function
 
 def ready_func(t, tcp_sock):
     if t == "RUNNING":
@@ -150,7 +151,7 @@ def signal(message, tcp_sock):
     elif (scu_message_request[0] == 0x58): # SCU replied to our request to clear logs
         scu_message_request =  struct.unpack_from(network_endianness+'BBH', vcu_tcp_received_message)
         print('CLEAR FAULT REPLY - Clear faults fault %d' % scu_message_request[2:])
-    else: # bad stuff
+    else: # SCU response does not match any of the ones it should be
         print "TCP received \"%s\"" % ([hex(ord(c)) for c in vcu_tcp_received_message])
         print "This is likely a malformed response from the SCU, or a code error"
 
@@ -162,7 +163,8 @@ def transition(current_state, t_state, tcp_sock):
         transition(current_state, t_state, tcp_sock)
 
 def set_state_from_scu(status):
-    new_state = "...." #this will have to decode the message from SCU into a state
+    status = "get_the_state_number_from_the_string_idk_how_yet"
+    new_state = _status_code_to_state[status] #this will have to decode the message from SCU into a state
     _state["state"] = new_state
 
 
