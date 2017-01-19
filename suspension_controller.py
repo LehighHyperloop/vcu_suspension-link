@@ -1,8 +1,3 @@
-#
-# Example of sending message to SCU over TCP
-#
-#start_scu_message_req = struct.pack(network_endianness+'BB', 0x11, 0);
-#tcp_sock.send(start_scu_message_req)
 
 import json
 import os
@@ -40,55 +35,69 @@ HEARTBEAT_MESSAGE_REPLY = struct.pack(network_endianness+'BBH', 0x57, 2, 123);
 CLEAR_FAULTS_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x18, 0);
 
 # External and internal states
-state = {
+_state = {
     "state": "IDLE",
-    "target_state": "IDLE",
+    "t_state": "IDLE"
 }
 
+#map of the actual message to send over TCP for
+#each of the abstract messages like "start SCU"
+_message_to_bytestring = {
+    "START_SCU": START_SCU_MESSAGE_REQ,
+    "STOP_SCU": STOP_SCU_MESSAGE_REQ,
+    "START_SCU_LOGGING": START_LOGGING_MESSAGE_REQ,
+    "STOP_SCU_LOGGING": STOP_LOGGING_MESSAGE_REQ,
+    "CLEAR_FAULT": CLEAR_FAULTS_MESSAGE_REQ,
+    "CLEAR_LOGS": CLEAR_LOGS_MESSAGE_REQ,
+    "AVAILABLE_SPACE": AVAILABLE_SPACE_MESSAGE_REQ,
+    "PING": PING_MESSAGE_REQ, #send to SCU to see if it's alive
+    "HEARTBEAT_REPLY": HEARTBEAT_MESSAGE_REPLY #response if SCU asks if we're alive
+}
+
+#convert the status code the SCU gives us into one of our actual
+#states. Might be able to just change the order around in the
+#other dict to match the order of the states and index it like an array?
+_status_code_to_state = {
+    0 : "SOME_STATE",
+    1 : "SOME_OTHER_STATE" #etc
+}
 
 def idle_func(t, tcp_sock):
     if t == "READY":
         signal("START_SCU", tcp_sock)
-        state["state"] = "HOMING"
 
 #not sure how this will work since the system will go from
 #idle to running through the intermediate states without
 #any extra input from us
 def homing_func(t, tcp_sock):
-    if t == "READY":
-        #have to check if the SCU is out of homing yet,
-        #don't know how to do that yet
-        if "some_conditional":
-            state["state"] = "READY"
+    pass
+    #since transition is automatic from homing to ready,
+    #we can just wait until the SCU reports it is ready, which will be
+    #handled by the transition() function
 
 def ready_func(t, tcp_sock):
     if t == "RUNNING":
         signal("START_SCU", tcp_sock)
-        state["state"] = "RUNNING"
 
 def running_func(t, tcp_sock):
     if t == "READY":
         signal("STOP_SCU", tcp_sock)
-        state["state"] = "READY"
     elif t == "RUNNING_AND_LOGGING":
         signal("START_SCU_LOGGING", tcp_sock)
-        state["state"] = "RUNNING_AND_LOGGING"
 
+#note: can only start logging when already running
 def running_and_logging_func(t, tcp_sock):
     if t == "READY":
         signal("STOP_SCU", tcp_sock)
-        state["state"] = "READY"
     elif t == "RUNNING":
         signal("STOP_SCU_LOGGING", tcp_sock)
-        state["state"] = "RUNNING"
 
 #actually need a fault transition in this one because
 #their system will lock itself into FAULT state and
-#not do anything until it receives ""
+#not do anything until it receives "CLEAR FAULT"
 def fault_func(t, tcp_sock):
     signal("CLEAR_FAULT", tcp_sock)
-    signal("STOP_SCU", tcp_sock)
-    state["state"] = "READY"
+    signal("STOP_SCU", tcp_sock) #default transition is Fault->Running, this sets it back to running
 
 
 #takes in a message from the list and actually sends the TCP communication,
@@ -96,30 +105,65 @@ def fault_func(t, tcp_sock):
 #might need to return True/False in the future idk
 def signal(message, tcp_sock):
     if tcp_sock is None:
+        print "No TCP connection [signal]"
         return
 
-    #see VCU_stub.py for wtf to do to send the message
-    if message == "START_SCU":
-        pass
-    elif message == "STOP_SCU":
-        pass
-    elif message == "START_SCU_LOGGING":
-        pass
-    elif message == "STOP_SCU_LOGGING":
-        pass
-    elif message == "CLEAR_FAULT":
-        pass
-    else:
-        print "[signal] Bad message"
+    if message not in _message_to_bytestring:
+        print "Bad command [signal]"
+        return
+
+    #send appropriate bytestring for message
+    tcp_sock.send(_message_to_bytestring[message])
+
+    #hear what the SCU says back over TCP
+    vcu_tcp_received_message = tcp_sock.recv(1024)
+    scu_message_request =  struct.unpack_from(network_endianness+'BB', vcu_tcp_received_message)
+
+    # Handling of received packet, each one has to be decoded differently
+    # eventually instead of just printing this will have to actually handle the
+    # different responses the SCU can give with control code...
+    if (scu_message_request[0] == 0x17): # SCU requests heartbeat, send it
+        scu_message_request =  struct.unpack_from(network_endianness+'BB', vcu_tcp_received_message)
+        signal("HEARTBEAT_REPLY", tcp_sock)
+        print "Responded to SCU heartbeat req"
+    elif (scu_message_request[0] == 0x50): # SCU replied to our ping
+        scu_message_request =  struct.unpack_from(network_endianness+'BBH', vcu_tcp_received_message)
+        print('PING REPLY - FW vers: %d' % scu_message_request[2:])
+    elif (scu_message_request[0] == 0x51): # SCU replied to our request to start
+        scu_message_request =  struct.unpack_from(network_endianness+'BBH', vcu_tcp_received_message)
+        print('START SCU REPLY - Start Fault %d' % scu_message_request[2:])
+    elif (scu_message_request[0] == 0x54): # SCU replied to our request to stop
+        scu_message_request =  struct.unpack_from(network_endianness+'BBH', vcu_tcp_received_message)
+        print('STOP SCU REPLY - Stop Fault %d' % scu_message_request[2:])
+    elif (scu_message_request[0] == 0x52): # SCU replied to our request to start logging
+        scu_message_request =  struct.unpack_from(network_endianness+'BB14s', vcu_tcp_received_message)
+        print('START LOGGING REPLY - Filename %s' % scu_message_request[2:])
+    elif (scu_message_request[0] == 0x53): # SCU replied to our request to stop logging
+        scu_message_request =  struct.unpack_from(network_endianness+'BB14s', vcu_tcp_received_message)
+        print('STOP LOGGING REPLY - Filename %s' % scu_message_request[2:])
+    elif (scu_message_request[0] == 0x56): # SCU replied to our request to clear logs
+        scu_message_request =  struct.unpack_from(network_endianness+'BBfH', vcu_tcp_received_message)
+        print('CLEAR LOGS REPLY - Available space %d Clear log faults %d' % scu_message_request[2:])
+    elif (scu_message_request[0] == 0x55): # SCU replied with available space
+        scu_message_request =  struct.unpack_from(network_endianness+'BBf', vcu_tcp_received_message)
+        print('AVAILABLE SD SPACE REPLY - Available space %d MB' % scu_message_request[2:])
+    elif (scu_message_request[0] == 0x58): # SCU replied to our request to clear logs
+        scu_message_request =  struct.unpack_from(network_endianness+'BBH', vcu_tcp_received_message)
+        print('CLEAR FAULT REPLY - Clear faults fault %d' % scu_message_request[2:])
+    else: # bad stuff
+        print "TCP received \"%s\"" % ([hex(ord(c)) for c in vcu_tcp_received_message])
+        print "This is likely a malformed response from the SCU, or a code error"
 
 
-#communicates over TCP to change system state from current_state to target_state
-#might need to change later to have each transition function return whether
-#it succeeded or not, like we do in the subsystem code
-def transition(current_state, target_state, tcp_sock):
-    _states[current_state](target_state, tcp_sock)
-    if state[current_state] != target_state:
-        transition(current_state, target_state, tcp_sock)
+#dispatches to functions to communicate over tcp_sock to change system state from current_state to t_state
+def transition(current_state, t_state, tcp_sock):
+    _possible_states[current_state](t_state, tcp_sock)
+    if _state[current_state] != t_state: #currently keeps trying until state becomes what we want it to be
+        transition(current_state, t_state, tcp_sock)
+
+def set_state_from_scu(status):
+    new_state = "...." #this will have to decode the message from SCU into a state
+    _state["state"] = new_state
 
 
 #pull status from TCP and UDP and send it out
@@ -127,7 +171,7 @@ def logic_loop(client, tcp_sock, udp_sock):
     #
     #read in state from AlesTech system over streaming UDP connection
     #TCP is only in response to us, so we will look for a TCP response
-    #if we choose to send a message to the system
+    #only if we are told over mqtt to send a message to the system (see signal() function)
     #
     msg = ""
     try:
@@ -142,33 +186,37 @@ def logic_loop(client, tcp_sock, udp_sock):
             print "Got message over UDP:", msg
             vcu_udp_received_message =  struct.unpack_from(network_endianness+'BB', msg)
 
-            #naturally prints will eventually be replaced with code for updating variables or something similar
+            #naturally prints will eventually be replaced with code for updating state or something
+            #based on what the SCU says
             if (vcu_udp_received_message[0] == 0x21):
                 vcu_udp_received_message =  struct.unpack_from(network_endianness+'BBfffffffHH', msg)
                 print('SUSPENSION TRAVELS FL: %f FR: %f RL: %f RR: %f X Acc: %f Y Acc:  %f Z Acc:  %f Faults:  %d Status: %d' % vcu_udp_received_message[2:])
+                set_state_from_scu(vcu_udp_received_message[2:])
             elif (vcu_udp_received_message[0] == 0x22):
                 vcu_udp_received_message =  struct.unpack_from(network_endianness+'BBffff', msg)
                 print('PAD DISTANCES FL: %f FR Pad: %f RL: %f RR Pad: %f' % vcu_udp_received_message[2:])
-            else:
+            else: #not sure why this says TCP instead of UDP but that's how theirs read. Will look into it
                 print('TCP received "%s"' % [hex(ord(c)) for c in vcu_udp_received_message])
 
 
-    client.publish(SUBSYSTEM, json.dumps(state)) #push state according to system
-    time.sleep(0.1)
+    client.publish(SUBSYSTEM, json.dumps(_state))
 
 #needed for the interface, doesn't really do anything as of now
 def on_message(client, topic, message):
-    message_components = message.split("/")
-    if message_components[:-2] != "set":
+    topic_components = message.topic.split("/")
+
+    if topic_components[2] != "set":
         return
 
-    state["target_state"] = message_components[:-1]
+    json_message = json.loads(message.payload)
+    print "Receieved mqtt message to set state to", json_message["t_state"]
+    _state["t_state"] = json_message["t_state"]
 
-    if state["state"] != state["target_state"]:
-        transition(state["state"], state["target_state"], tcp_sock)
+    if _state["state"] != _state["t_state"]:
+        transition(_state["state"], _state["t_state"], tcp_sock)
 
 #keeping the same function map layout from other code because I like it
-_states = {
+_possible_states = {
     "IDLE": idle_func,
     "HOMING": homing_func,
     "READY": ready_func,
@@ -187,18 +235,23 @@ client.loop_start()
 client.on_message = on_message
 client.subscribe(SUBSYSTEM + "/#")
 
-# Setup TCP and UDP connection to system
-udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-print "Connecting by UDP on", SUSPENSION_IP
-udp_sock.bind(('', SUSPENSION_PORT))
-server_address = (SUSPENSION_IP, SUSPENSION_PORT)
-udp_sock.settimeout(0.01) #10 ms
+try:
+    # Setup TCP and UDP connection to system
+    udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    print "Connecting by UDP on", SUSPENSION_IP
+    udp_sock.bind(('', SUSPENSION_PORT))
+    server_address = (SUSPENSION_IP, SUSPENSION_PORT)
+    # udp_sock.settimeout(0.01) #10 ms
 
-tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-print "Connecting by TCP on", SUSPENSION_IP
-tcp_sock.connect((SUSPENSION_IP, SUSPENSION_PORT))
-tcp_sock.settimeout(0.01) #10 ms
+    tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    print "Connecting by TCP on", SUSPENSION_IP
+    tcp_sock.connect((SUSPENSION_IP, SUSPENSION_PORT))
+    # tcp_sock.settimeout(0.01) #10 ms
+except socket.error, e:
+    print "Error opening socket:", e
+    quit()
 
+print "Successfully Connected to SCU"
 get_endianness()
 
 while True:
