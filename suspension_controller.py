@@ -9,12 +9,35 @@ import os
 import paho.mqtt.client as mqtt
 import socket
 import time
+import struct
+import sys
 
 SUBSYSTEM = "remote_subsystem/suspension"
 MQTT_IP = '192.168.0.100'
 SUSPENSION_IP = "192.168.0.151"
 SUSPENSION_PORT = 3000
 
+network_endianness = ''
+
+def get_endianness():
+    if sys.byteorder == 'little':
+        network_endianness='>'
+        print >>sys.stderr, 'Network endianness: opposite of system\'s'
+    else:
+        network_endianness='<'
+        print >>sys.stderr, 'Network endianness: same as system\'s'
+
+#SPEED_AND_ACCELERATION_PERIODIC_MESSAGE = struct.pack(network_endianness+'BBff', 0x20, 8, my_speed, my_acceleration);
+#have to build this ^ one when you have the speed and acceleration
+PING_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x10, 0);
+START_SCU_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x11, 0);
+START_LOGGING_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x12, 0);
+STOP_LOGGING_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x13, 0);
+STOP_SCU_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x14, 0);
+AVAILABLE_SPACE_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x15, 0);
+CLEAR_LOGS_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x16, 0);
+HEARTBEAT_MESSAGE_REPLY = struct.pack(network_endianness+'BBH', 0x57, 2, 123);
+CLEAR_FAULTS_MESSAGE_REQ = struct.pack(network_endianness+'BB', 0x18, 0);
 
 # External and internal states
 state = {
@@ -175,6 +198,8 @@ tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 print "Connecting by TCP on", SUSPENSION_IP
 tcp_sock.connect((SUSPENSION_IP, SUSPENSION_PORT))
 tcp_sock.settimeout(0.01) #10 ms
+
+get_endianness()
 
 while True:
     logic_loop(client, tcp_sock, udp_sock)
