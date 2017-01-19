@@ -15,17 +15,6 @@ MQTT_IP = '192.168.0.100'
 SUSPENSION_IP = "192.168.0.151"
 SUSPENSION_PORT = 3000
 
-#keeping the same function map layout from other code because I like it
-_states = {
-    "IDLE": idle_func,
-    "HOMING": homing_func,
-    "READY": ready_func,
-    "RUNNING": running_func,
-    "RUNNING_AND_LOGGING": running_and_logging_func,
-    "FAULT": fault_func,
-    "ESTOP": None
-}
-
 
 # External and internal states
 state = {
@@ -46,7 +35,7 @@ def homing_func(t, tcp_sock):
     if t == "READY":
         #have to check if the SCU is out of homing yet,
         #don't know how to do that yet
-        if "some_conditional"
+        if "some_conditional":
             state["state"] = "READY"
 
 def ready_func(t, tcp_sock):
@@ -154,6 +143,17 @@ def on_message(client, topic, message):
 
     if state["state"] != state["target_state"]:
         transition(state["state"], state["target_state"], tcp_sock)
+
+#keeping the same function map layout from other code because I like it
+_states = {
+    "IDLE": idle_func,
+    "HOMING": homing_func,
+    "READY": ready_func,
+    "RUNNING": running_func,
+    "RUNNING_AND_LOGGING": running_and_logging_func,
+    "FAULT": fault_func,
+    "ESTOP": None
+}
 
 
 # Setup mqtt client
