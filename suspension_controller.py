@@ -33,10 +33,10 @@ HEARTBEAT_MESSAGE_REPLY = struct.pack(network_endianness+"BBH", 0x57, 2, 123);
 CLEAR_FAULTS_MESSAGE_REQ = struct.pack(network_endianness+"BB", 0x18, 0);
 
 # External and internal states
-_state = {
-    "state": "IDLE",
-    "t_state": "IDLE"
-}
+_state = "IDLE"
+_t_state = "READY"
+
+_remote_state_waiting = False
 
 #map of the actual message to send over TCP for
 #each of the abstract messages like "start SCU"
@@ -68,7 +68,8 @@ def idle_func(t, tcp_sock):
         signal("START_SCU", tcp_sock)
 
 def homing_func(t, tcp_sock):
-    _state["state"] = t
+    # Wait for homing to complete
+    pass
 
 def ready_func(t, tcp_sock):
     if t == "RUNNING":
@@ -92,7 +93,7 @@ def running_and_logging_func(t, tcp_sock):
 #not do anything until it receives "CLEAR FAULT"
 def fault_func(t, tcp_sock):
     signal("CLEAR_FAULT", tcp_sock)
-    signal("STOP_SCU", tcp_sock) #default transition is Fault->Running, this sets it back to running
+    #signal("STOP_SCU", tcp_sock) #default transition is Fault->Running, this sets it back to ready
 
 
 #takes in a message from the list and actually sends the TCP communication,
@@ -110,6 +111,7 @@ def signal(message, tcp_sock):
     #send appropriate bytestring for message
     tcp_sock.send(_message_to_bytestring[message])
 
+def handle_tcp(tcp_sock):
     #hear what the SCU says back over TCP
     vcu_tcp_received_message = tcp_sock.recv(1024)
     scu_message_request =  struct.unpack_from(network_endianness+'BB', vcu_tcp_received_message)
@@ -161,9 +163,9 @@ def transition(current_state, t_state, tcp_sock):
 def set_state_from_scu(status):
     new_state = _status_code_to_state[status[8]] #this will have to decode the message from SCU into a state
     print "STATE READ FROM SCU: ", new_state
-    _state["state"] = new_state
-    if _state["t_state"] == "IDLE": #gets stuck thinking it's in IDLE if the suspension starts first
-	_state["t_state"] = new_state
+    if new_state != _state:
+        _state = new_state
+        _remote_state_waiting = False
 
 #pull status from TCP and UDP and send it out
 def logic_loop(client, tcp_sock, udp_sock):
@@ -176,7 +178,7 @@ def logic_loop(client, tcp_sock, udp_sock):
     try:
         msg = udp_sock.recv(4096)
     except socket.timeout, e: #if timeout, just keep waiting (logic_loop will be called again)
-        return
+        pass 
     except socket.error, e: # an actual bad error
         print e
         sys.exit(1)
@@ -195,8 +197,16 @@ def logic_loop(client, tcp_sock, udp_sock):
         else: #not sure why this says TCP instead of UDP but that's how theirs read. Will look into it
             print('TCP received "%s"' % [hex(ord(c)) for c in vcu_udp_received_message])
 
-    print "Current state:", json.dumps(_state)
-    client.publish(SUBSYSTEM, json.dumps(_state))
+    try:
+        handle_tcp(tcp_sock)
+    except socket.timeout, e: #if timeout, just keep waiting (logic_loop will be called again)
+        pass
+    except socket.error, e: # an actual bad error
+        print e
+        sys.exit(1)
+
+    print "Current state:", json.dumps({ "state": _state, "t_state": _t_state })
+    client.publish(SUBSYSTEM, json.dumps({ "state": _state, "t_state": _t_state }))
 
 #needed for the interface, doesn't really do anything as of now
 def on_message(mosq, obj, msg):
@@ -210,10 +220,11 @@ def on_message(mosq, obj, msg):
 
     json_msg = json.loads(msg.payload)
     print "Received mqtt msg to set state to", json_msg["t_state"]
-    _state["t_state"] = json_msg["t_state"]
+    _t_state = json_msg["t_state"]
 
-    if _state["state"] != _state["t_state"]:
-        transition(_state["state"], _state["t_state"], tcp_sock)
+    if _state != _t_state and _remote_state_waiting == False:
+        transition(_state, _t_state, tcp_sock)
+        _remote_state_waiting = True
 
 #keeping the same function map layout from other code because I like it
 _possible_states = {
