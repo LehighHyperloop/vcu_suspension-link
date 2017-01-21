@@ -13,7 +13,7 @@ SUSPENSION_PORT = 3000
 
 network_endianness = ''
 if sys.byteorder == "little":
-	network_endianness=">"
+        network_endianness=">"
         print >>sys.stderr, "Network endianness: opposite of system\'s"
 else:
         network_endianness="<"
@@ -36,7 +36,10 @@ CLEAR_FAULTS_MESSAGE_REQ = struct.pack(network_endianness+"BB", 0x18, 0);
 _state = "IDLE"
 _t_state = "READY"
 
-_remote_state_waiting = False
+_logging = False
+
+_time_of_last_command = None
+UPDATE_TIMEOUT = 1
 
 #map of the actual message to send over TCP for
 #each of the abstract messages like "start SCU"
@@ -64,8 +67,10 @@ _status_code_to_state = {
 }
 
 def idle_func(t, tcp_sock):
-    if t == "READY":
-        signal("START_SCU", tcp_sock)
+    # I think their state diagram is wrong, just wait until we reach READY
+    #if t == "READY":
+    #    signal("START_SCU", tcp_sock)
+    pass
 
 def homing_func(t, tcp_sock):
     # Wait for homing to complete
@@ -109,9 +114,11 @@ def signal(message, tcp_sock):
         return
 
     #send appropriate bytestring for message
+    print "SENDING: " + message
     tcp_sock.send(_message_to_bytestring[message])
 
 def handle_tcp(tcp_sock):
+    global _state, _t_state, _time_of_last_command, _logging
     #hear what the SCU says back over TCP
     vcu_tcp_received_message = tcp_sock.recv(1024)
     scu_message_request =  struct.unpack_from(network_endianness+'BB', vcu_tcp_received_message)
@@ -138,9 +145,15 @@ def handle_tcp(tcp_sock):
         print('STOP SCU REPLY - Stop Fault %d' % scu_message_request[2:])
     elif (scu_message_request[0] == 0x52): # SCU replied to our request to start logging
         scu_message_request =  struct.unpack_from(network_endianness+'BB14s', vcu_tcp_received_message)
-        print('START LOGGING REPLY - Filename %s' % scu_message_request[2:])
+	file_name = scu_message_request[2:]
+	if file_name != "LogIsForbidden":
+	    _logging = True
+        print('START LOGGING REPLY - Filename %s' % file_name)
     elif (scu_message_request[0] == 0x53): # SCU replied to our request to stop logging
         scu_message_request =  struct.unpack_from(network_endianness+'BB14s', vcu_tcp_received_message)
+	file_name = scu_message_request[2:]
+	if file_name != "LogIsForbidden":
+	    _logging = False
         print('STOP LOGGING REPLY - Filename %s' % scu_message_request[2:])
     elif (scu_message_request[0] == 0x56): # SCU replied to our request to clear logs
         scu_message_request =  struct.unpack_from(network_endianness+'BBfH', vcu_tcp_received_message)
@@ -161,14 +174,22 @@ def transition(current_state, t_state, tcp_sock):
     _possible_states[current_state](t_state, tcp_sock)
 
 def set_state_from_scu(status):
+    global _state, _t_state, _time_of_last_command, _logging
     new_state = _status_code_to_state[status[8]] #this will have to decode the message from SCU into a state
+
+    # Handle weird state transitions
+    if new_state == "RUNNING" and _logging:
+	new_state = "RUNNING_AND_LOGGING"
+
     print "STATE READ FROM SCU: ", new_state
+
     if new_state != _state:
         _state = new_state
-        _remote_state_waiting = False
+        _time_of_last_command = None
 
 #pull status from TCP and UDP and send it out
 def logic_loop(client, tcp_sock, udp_sock):
+    global _state, _t_state, _time_of_last_command
     #
     #read in state from AlesTech system over streaming UDP connection
     #TCP is only in response to us, so we will look for a TCP response
@@ -178,7 +199,7 @@ def logic_loop(client, tcp_sock, udp_sock):
     try:
         msg = udp_sock.recv(4096)
     except socket.timeout, e: #if timeout, just keep waiting (logic_loop will be called again)
-        pass 
+        pass
     except socket.error, e: # an actual bad error
         print e
         sys.exit(1)
@@ -189,13 +210,30 @@ def logic_loop(client, tcp_sock, udp_sock):
         #based on what the SCU says
         if (vcu_udp_received_message[0] == 0x21):
             vcu_udp_received_message =  struct.unpack_from(network_endianness+'BBfffffffHH', msg)
-            print('SUSPENSION TRAVELS FL: %f FR: %f RL: %f RR: %f X Acc: %f Y Acc:  %f Z Acc:  %f Faults:  %d Status: %d' % vcu_udp_received_message[2:])
             set_state_from_scu(vcu_udp_received_message[2:])
+            # print('SUSPENSION TRAVELS FL: %f FR: %f RL: %f RR: %f X Acc: %f Y Acc:  %f Z Acc:  %f Faults:  %d Status: %d' % vcu_udp_received_message[2:])
+            client.publish("sensor/suspension/travel", json.dumps({
+                "fl": vcu_udp_received_message[2],
+                "fr": vcu_udp_received_message[3],
+                "rl": vcu_udp_received_message[4],
+                "rr": vcu_udp_received_message[5]
+            }))
+            client.publish("sensor/suspension/accel", json.dumps({
+                "x": vcu_udp_received_message[6],
+                "y": vcu_udp_received_message[7],
+                "z": vcu_udp_received_message[8],
+            }))
         elif (vcu_udp_received_message[0] == 0x22):
             vcu_udp_received_message =  struct.unpack_from(network_endianness+'BBffff', msg)
-            print('PAD DISTANCES FL: %f FR Pad: %f RL: %f RR Pad: %f' % vcu_udp_received_message[2:])
+            # print('PAD DISTANCES FL: %f FR Pad: %f RL: %f RR Pad: %f' % vcu_udp_received_message[2:])
+            client.publish("sensor/suspension/distance", json.dumps({
+                "fl": vcu_udp_received_message[2],
+                "fr": vcu_udp_received_message[3],
+                "rl": vcu_udp_received_message[4],
+                "rr": vcu_udp_received_message[5]
+            }))
         else: #not sure why this says TCP instead of UDP but that's how theirs read. Will look into it
-            print('TCP received "%s"' % [hex(ord(c)) for c in vcu_udp_received_message])
+            print('UDP received "%s"' % [hex(ord(c)) for c in vcu_udp_received_message])
 
     try:
         handle_tcp(tcp_sock)
@@ -205,11 +243,11 @@ def logic_loop(client, tcp_sock, udp_sock):
         print e
         sys.exit(1)
 
-    print "Current state:", json.dumps({ "state": _state, "t_state": _t_state })
     client.publish(SUBSYSTEM, json.dumps({ "state": _state, "t_state": _t_state }))
 
 #needed for the interface, doesn't really do anything as of now
 def on_message(mosq, obj, msg):
+    global _state, _t_state, _time_of_last_command
     topic_components = msg.topic.split("/")
 
     if len(topic_components) != 3:
@@ -219,12 +257,12 @@ def on_message(mosq, obj, msg):
         return
 
     json_msg = json.loads(msg.payload)
-    print "Received mqtt msg to set state to", json_msg["t_state"]
+    # print "Received mqtt msg to set state to", json_msg["t_state"]
     _t_state = json_msg["t_state"]
 
-    if _state != _t_state and _remote_state_waiting == False:
+    if _state != _t_state and (_time_of_last_command is None or time.time() - _time_of_last_command >= UPDATE_TIMEOUT):
         transition(_state, _t_state, tcp_sock)
-        _remote_state_waiting = True
+        _time_of_last_command = time.time()
 
 #keeping the same function map layout from other code because I like it
 _possible_states = {
@@ -246,21 +284,33 @@ client.loop_start()
 client.on_message = on_message
 client.subscribe(SUBSYSTEM + "/#")
 
+
+udp_sock = None
+tcp_sock = None
+
 try:
     # Setup TCP and UDP connection to system
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    print "Connecting by UDP on", SUSPENSION_IP
+    print "Binding UDP on", SUSPENSION_PORT
     udp_sock.bind(('', SUSPENSION_PORT))
-    server_address = (SUSPENSION_IP, SUSPENSION_PORT)
-    #udp_sock.settimeout(0.1)#100 ms
+    udp_sock.settimeout(0.01) #10 ms
+except:
+    print "Error binding to UDP: ", e
+    quit
 
-    tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    print "Connecting by TCP on", SUSPENSION_IP
-    tcp_sock.connect((SUSPENSION_IP, SUSPENSION_PORT))
-    # tcp_sock.settimeout(0.01) #10 ms
-except socket.error, e:
-    print "Error opening socket:", e
-    quit()
+while (True):
+    try:
+        tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        print "Connecting by TCP on", SUSPENSION_IP, ":", SUSPENSION_PORT
+        tcp_sock.connect((SUSPENSION_IP, SUSPENSION_PORT))
+        tcp_sock.settimeout(0.01) #10 ms
+    except socket.error, e:
+        print "Error opening socket:", e
+        time.sleep(0.5)
+    else:
+        print "Connected"
+        break
+
 
 print "Successfully Connected to SCU"
 #get_endianness()
