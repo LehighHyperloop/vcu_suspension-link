@@ -294,7 +294,7 @@ try:
     udp_sock.bind(('', SUSPENSION_PORT))
     udp_sock.settimeout(0.01) #10 ms
 except:
-    print "Error binding to UDP: ", e
+    print "Error binding to UDP"
     quit
 
 while (True):
