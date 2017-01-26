@@ -67,9 +67,8 @@ _status_code_to_state = {
 }
 
 def idle_func(t, tcp_sock):
-    # I think their state diagram is wrong, just wait until we reach READY
-    #if t == "READY":
-    #    signal("START_SCU", tcp_sock)
+    if t == "READY":
+        signal("START_SCU", tcp_sock)
     pass
 
 def homing_func(t, tcp_sock):
